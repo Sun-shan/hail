@@ -136,7 +136,7 @@ object Variant {
     Gen.buildableOfN[Array[Variant], Variant](nVariants, gen)
 
   def gen: Gen[Variant] =
-    // FIXME temporary to make plink happy, see: https://github.com/broadinstitute/hail/issues/229
+  // FIXME temporary to make plink happy, see: https://github.com/broadinstitute/hail/issues/229
     for (contig <- Gen.oneOfSeq((1 to 22).map(_.toString));
       start <- Gen.posInt;
       nAlleles <- Gen.frequency((5, Gen.const(2)), (1, Gen.choose(2, 10)));
@@ -159,11 +159,14 @@ object Variant {
         nullable = false)))
 
   def fromRow(r: Row) =
-    Variant(r.getAs[String](0),
-      r.getAs[Int](1),
-      r.getAs[String](2),
-      r.getAs[mutable.WrappedArray[Row]](3)
-        .map(s => AltAllele.fromRow(s)))
+    if (r == null)
+      null
+    else
+      Variant(r.getAs[String](0),
+        r.getAs[Int](1),
+        r.getAs[String](2),
+        r.getAs[mutable.WrappedArray[Row]](3)
+          .map(s => AltAllele.fromRow(s)))
 }
 
 case class Variant(contig: String,
