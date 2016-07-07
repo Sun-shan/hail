@@ -260,7 +260,7 @@ object BlockedGenotypes {
       (leader.pl.isDefined == g.pl.isDefined) &&
       (leader.fakeRef == g.fakeRef) &&
       leader.gq.isDefined && g.gq.isDefined &&
-      leader.gq.map(gqBucket) == g.gq.map(gqBucket) && false
+      leader.gq.map(gqBucket) == g.gq.map(gqBucket) // && false
   }
 
   def merge(leader: Genotype, g: Genotype): Genotype = {
@@ -290,44 +290,44 @@ object BlockedGenotypes {
   }
 
   def block(nSamples: Int, it: Iterator[(Variant, Annotation, Iterable[Genotype])]): Iterator[(Variant, Annotation, Int, Genotype)] = {
-    val blockLeader = new Array[Genotype](nSamples)
-    val blockIndex = new Array[Int](nSamples)
+    val r = it
+      .grouped(50)
+      .flatMap { jt =>
+        val blockLeader = new Array[Genotype](nSamples)
+        val blockIndex = new Array[Int](nSamples)
 
-    // FIXME dangerous, limit size
-    val ab = new mutable.ArrayBuffer[(Variant, Annotation, Int, Genotype)]
+        val ab = new mutable.ArrayBuffer[(Variant, Annotation, Int, Genotype)]
 
-    var savings: Int = 0
+        jt.foreach { case (v, va, gs) =>
+          ab += ((v, va, 0, null))
 
-    it.foreach { case (v, va, gs) =>
-      ab += ((v, va, 0, null))
+          gs.zipWithIndex.foreach { case (g, s) =>
+            val leader = blockLeader(s)
+            if (sameBlock(leader, g)) {
+              blockLeader(s) = merge(leader, g)
+            } else {
+              if (leader != null)
+                ab(blockIndex(s)) = (null, null, s, leader)
 
-      gs.zipWithIndex.foreach { case (g, s) =>
-        val leader = blockLeader(s)
-        if (sameBlock(leader, g)) {
-          blockLeader(s) = merge(leader, g)
-          savings += 1
-        } else {
-          if (leader != null)
-            ab(blockIndex(s)) = (null, null, s, leader)
-
-          blockLeader(s) = g
-          blockIndex(s) = ab.size
-          ab += null
+              blockLeader(s) = g
+              blockIndex(s) = ab.size
+              ab += null
+            }
+          }
         }
+
+        for (s <- blockLeader.indices) {
+          val i = blockIndex(s)
+          // println(s"i=$i, |ab|=${ab.size}")
+          val leader = blockLeader(s)
+          assert(leader != null)
+          ab(i) = (null, null, s, leader)
+        }
+
+        ab.iterator
       }
-    }
 
-    for (s <- blockLeader.indices) {
-      val i = blockIndex(s)
-      // println(s"i=$i, |ab|=${ab.size}")
-      val leader = blockLeader(s)
-      assert(leader != null)
-      ab(i) = (null, null, s, leader)
-    }
-
-    println(s"savings = $savings")
-
-    ab.iterator
+    r
   }
 
   def unblock(nSamples: Int, it: BufferedIterator[(Variant, Annotation, Int, Genotype)]): Iterator[(Variant, Annotation, Iterable[Genotype])] = {
@@ -870,7 +870,7 @@ class RichVDS(vds: VariantDataset) {
     val vaRequiresConversion = vaSignature.requiresConversion
 
     val localNSamples = vds.nSamples
-    val rowRDD = vds.rdd.map { case (v, va, gs) =>
+    val blockedRDD = vds.rdd.map { case (v, va, gs) =>
       (v,
         if (vaRequiresConversion)
           vaSignature.makeSparkWritable(va)
@@ -880,7 +880,16 @@ class RichVDS(vds: VariantDataset) {
     }
       .mapPartitions { it =>
         BlockedGenotypes.block(localNSamples, it)
-      }.map { case (v, va, s, g) =>
+      }
+
+    // FIXME expensive, remove
+    val nUnblocked = vds.nVariants * vds.nSamples
+    val nBlocked = blockedRDD.count()
+    val savings = nUnblocked - nBlocked
+
+    println(s"unblocked = $nUnblocked, blocked = $nBlocked, savings = $savings, ${savings.toDouble / nUnblocked}%")
+
+    val rowRDD = blockedRDD.map { case (v, va, s, g) =>
       Row.fromSeq(Array(
         if (v == null) null else v.toRow,
         va, s,
