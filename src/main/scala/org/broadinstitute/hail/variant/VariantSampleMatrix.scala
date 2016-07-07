@@ -870,7 +870,7 @@ class RichVDS(vds: VariantDataset) {
     val vaRequiresConversion = vaSignature.requiresConversion
 
     val localNSamples = vds.nSamples
-    val blockedRDD = vds.rdd.map { case (v, va, gs) =>
+    val rowRDD = vds.rdd.map { case (v, va, gs) =>
       (v,
         if (vaRequiresConversion)
           vaSignature.makeSparkWritable(va)
@@ -881,23 +881,15 @@ class RichVDS(vds: VariantDataset) {
       .mapPartitions { it =>
         BlockedGenotypes.block(localNSamples, it)
       }
-
-    // FIXME expensive, remove
-    val nUnblocked = vds.nVariants * vds.nSamples
-    val nBlocked = blockedRDD.count()
-    val savings = nUnblocked - nBlocked
-
-    println(s"unblocked = $nUnblocked, blocked = $nBlocked, savings = $savings, ${savings.toDouble / nUnblocked}%")
-
-    val rowRDD = blockedRDD.map { case (v, va, s, g) =>
-      Row.fromSeq(Array(
-        if (v == null) null else v.toRow,
-        va, s,
-        if (g == null)
-          null
-        else
-          g.toRow))
-    }
+      .map { case (v, va, s, g) =>
+        Row.fromSeq(Array(
+          if (v == null) null else v.toRow,
+          va, s,
+          if (g == null)
+            null
+          else
+            g.toRow))
+      }
 
     sqlContext.createDataFrame(rowRDD, BlockedGenotypes.schema(vaSignature.schema))
       .write.parquet(dirname + "/rdd.parquet")
